@@ -1,0 +1,47 @@
+docker-compose.yml — infrastructure de dev uniquement
+#
+# Lance Redis et MongoDB pour le développement local.
+# L'API Python tourne sur ta machine avec uvicorn --reload.
+#
+# Usage :
+#   docker compose up -d        → lance Redis + MongoDB en arrière-plan
+#   docker compose down         → arrête tout
+#   docker compose down -v      → arrête + supprime les données (reset complet)
+ 
+services:
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    # healthcheck : permet aux autres services (et à ton API)
+    # de savoir si Redis est réellement prêt, pas juste démarré
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+ 
+  mongodb:
+    image: mongo:7
+    ports:
+      - "27017:27017"
+    environment:
+      # En dev, pas de mot de passe — en prod ce serait différent.
+      # C'est pour ça qu'on a un .env.example qui documente les variables.
+      MONGO_INITDB_DATABASE: scanner_db
+    volumes:
+      - mongo_data:/data/db
+    healthcheck:
+      test: ["CMD", "mongosh", "--eval", "db.adminCommand('ping')"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+ 
+# Volumes nommés : les données persistent entre les redémarrages.
+# docker compose down    → les données restent
+# docker compose down -v → les données sont supprimées
+volumes:
+  redis_data:
+  mongo_data:

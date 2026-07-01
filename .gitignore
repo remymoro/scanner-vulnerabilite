@@ -1,7 +1,6 @@
-# Secrets — jamais dans git
 .env
 *.env.local
-
+ 
 # Python
 __pycache__/
 *.py[cod]
@@ -10,11 +9,13 @@ __pycache__/
 venv/
 .pytest_cache/
 .ruff_cache/
+*.egg-info/
 .mypy_cache/
 htmlcov/
 .coverage
-
+ 
 # Éditeurs / OS
 .vscode/
 .idea/
 .DS_Store
+ 
