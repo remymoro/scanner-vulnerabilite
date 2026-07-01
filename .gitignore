@@ -1,0 +1,20 @@
+# Secrets — jamais dans git
+.env
+*.env.local
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+htmlcov/
+.coverage
+
+# Éditeurs / OS
+.vscode/
+.idea/
+.DS_Store
