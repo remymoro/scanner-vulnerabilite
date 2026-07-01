@@ -19,6 +19,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from scanner.api.routers import scan as scan_router
 from scanner.infrastructure.config import settings
+from scanner.infrastructure.database import close_databases, init_databases
 
 
 @asynccontextmanager
@@ -33,15 +34,19 @@ async def lifespan(app: FastAPI):
         onModuleInit()  → avant le yield
         onModuleDestroy() → après le yield
 
-    Pour l'instant c'est vide — on connectera MongoDB et Redis
-    en Phase 3. Mais la structure est déjà prête.
+    app.state est un dictionnaire libre attaché à l'instance FastAPI.
+    On y stocke les repositories pour les rendre accessibles aux
+    endpoints via l'injection de dépendances (Depends).
     """
     # --- Démarrage ---
-    # TODO Phase 3 : ouvrir les connexions MongoDB et Redis
     print(f"Scanner API starting... (log_level={settings.log_level})")
+    mongo_repo, redis_repo = await init_databases()
+    app.state.mongo_repo = mongo_repo
+    app.state.redis_repo = redis_repo
+    print("Connected to MongoDB and Redis")
     yield
     # --- Arrêt ---
-    # TODO Phase 3 : fermer proprement les connexions
+    await close_databases(mongo_repo, redis_repo)
     print("Scanner API shutting down...")
 
 
