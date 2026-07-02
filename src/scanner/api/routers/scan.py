@@ -1,27 +1,29 @@
 """
 Router pour les endpoints de scan.
 
-Maintenant connecté aux vrais repositories MongoDB et Redis.
+Le POST /scan lance les checks en arrière-plan via BackgroundTasks
+et retourne immédiatement un scan_id au client. Le client récupère
+le rapport plus tard via GET /scan/{scan_id}.
 
-L'injection de dépendances FastAPI fonctionne via Depends() :
+Pourquoi BackgroundTasks et pas un await direct ?
+→ Un scan SSL prend 5-15 secondes. Si on fait await dans le POST,
+  le client attend 15 secondes avant d'avoir une réponse — mauvaise UX.
+  Avec BackgroundTasks, le POST répond en ~50ms avec le scan_id,
+  et le scan tourne en arrière-plan.
 
-    NestJS                                  FastAPI
-    ──────                                  ───────
-    @Inject(MongoRepo) repo: MongoRepo      Depends(get_mongo_repo)
-    constructor injection                   function parameter injection
-
-La différence : NestJS injecte via le constructeur de la classe,
-FastAPI injecte via les paramètres de chaque fonction endpoint.
-Le principe est le même — l'endpoint ne crée pas ses dépendances,
-il les reçoit de l'extérieur.
+En NestJS, l'équivalent serait un EventEmitter ou un Bull queue :
+  this.eventEmitter.emit('scan.start', { scanId, url });
 """
 
 import uuid
 
-from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Request
 
 from scanner.api.schemas.scan import ScanRequest, ScanResponse
+from scanner.checks.headers import HeadersCheck
+from scanner.checks.ssl_tls import SslCheck
 from scanner.core.interfaces.report_repository import IReportRepository
+from scanner.services.scan_service import ScanService
 
 router = APIRouter(
     prefix="/scan",
@@ -30,40 +32,55 @@ router = APIRouter(
 
 
 def get_redis_repo(request: Request) -> IReportRepository:
-    """
-    Fonction d'injection — récupère le repository Redis
-    depuis app.state (où le lifespan l'a stocké).
-
-    Pourquoi une fonction et pas un import direct ?
-    → Parce que le repository n'existe pas encore quand le module
-      est importé — il est créé au démarrage dans le lifespan.
-      La fonction est appelée à chaque requête, quand l'app est
-      déjà démarrée et les connexions ouvertes.
-    """
     return request.app.state.redis_repo
 
 
 def get_mongo_repo(request: Request) -> IReportRepository:
-    """Même principe pour MongoDB."""
     return request.app.state.mongo_repo
 
 
-@router.post("/", response_model=ScanResponse)
-async def start_scan(request: ScanRequest) -> ScanResponse:
+def get_scan_service(request: Request) -> ScanService:
     """
-    Lance un scan de sécurité sur l'URL fournie.
+    Crée le ScanService avec les vrais checks et repositories.
 
-    Pour l'instant on génère juste un ID — le vrai scan
-    arrivera en Phase 6 (orchestration avec asyncio.gather).
+    Pourquoi créer le service à chaque requête plutôt qu'une seule
+    fois au démarrage ?
+    → Parce que la liste des checks pourrait varier par requête
+      (ex: un paramètre ?checks=headers,ssl). Pour l'instant c'est
+      fixe, mais la structure est prête pour évoluer.
+
+    Les checks sont instanciés ici — ce sont des objets légers
+    sans état, donc les recréer ne coûte rien.
+    """
+    return ScanService(
+        checks=[HeadersCheck(), SslCheck()],
+        mongo_repo=request.app.state.mongo_repo,
+        redis_repo=request.app.state.redis_repo,
+    )
+
+
+@router.post("/", response_model=ScanResponse)
+async def start_scan(
+    request: ScanRequest,
+    background_tasks: BackgroundTasks,
+    scan_service: ScanService = Depends(get_scan_service),
+) -> ScanResponse:
+    """
+    Lance un scan en arrière-plan et retourne immédiatement le scan_id.
+
+    Le client n'attend pas la fin du scan — il récupère le rapport
+    via GET /scan/{scan_id} quand il est prêt.
     """
     scan_id = str(uuid.uuid4())
+    url = str(request.url)
 
-    # TODO Phase 6 : lancer ScanOrchestrator en arrière-plan
+    # Lance le scan en arrière-plan — le POST retourne tout de suite
+    background_tasks.add_task(scan_service.run_scan, scan_id, url)
 
     return ScanResponse(
         scan_id=scan_id,
         status="pending",
-        message=f"Scan started for {request.url}",
+        message=f"Scan started for {url}",
     )
 
 
@@ -74,29 +91,17 @@ async def get_report(
     mongo_repo: IReportRepository = Depends(get_mongo_repo),
 ) -> dict:
     """
-    Récupère le rapport d'un scan — cherche dans Redis puis MongoDB.
-
-    C'est le même flow que dans ton stage :
-    1. Chercher dans Redis (cache rapide, TTL 24h)
-    2. Si absent → chercher dans MongoDB (persistance)
-    3. Si absent partout → 404
-
-    La seule différence : c'est async, et les repositories
-    sont injectés via Depends() au lieu d'être créés ici.
+    Récupère le rapport d'un scan — Redis (cache) puis MongoDB (persistance).
     """
-    # 1. Redis d'abord — réponse en ~1ms
     report = await redis_repo.get_report(scan_id)
     if report is not None:
         return report
 
-    # 2. MongoDB ensuite — réponse en ~5-20ms
     report = await mongo_repo.get_report(scan_id)
     if report is not None:
-        # On remet en cache Redis pour les prochains accès
         await redis_repo.save_report(scan_id, report)
         return report
 
-    # 3. Rien trouvé nulle part
     raise HTTPException(
         status_code=404,
         detail=f"No report found for scan_id: {scan_id}",

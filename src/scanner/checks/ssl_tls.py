@@ -25,6 +25,7 @@ from urllib.parse import urlparse
 from sslyze import (
     ScanCommand,
     Scanner,
+    ServerNetworkLocation,
     ServerScanRequest,
     ServerScanStatusEnum,
 )
@@ -168,7 +169,7 @@ class SslCheck(BaseCheck):
         details: list[CheckDetail] = []
         score_deductions = 0
 
-        scan_request = ServerScanRequest(hostname)
+        scan_request = ServerScanRequest(server_location=ServerNetworkLocation(hostname=hostname))
         scanner = Scanner()
         scanner.queue_scans([scan_request])
 
@@ -178,7 +179,7 @@ class SslCheck(BaseCheck):
 
             # 1. PROTOCOLES DÉPRÉCIÉS
             for scan_cmd, proto_name in DEPRECATED_PROTOCOLS.items():
-                cmd_result = result.scan_result.get(scan_cmd)
+                cmd_result = getattr(result.scan_result, scan_cmd.value, None)
                 if cmd_result and cmd_result.result:
                     accepted = cmd_result.result.accepted_cipher_suites
                     if accepted:
@@ -208,7 +209,7 @@ class SslCheck(BaseCheck):
             weak_count = 0
 
             for scan_cmd, proto_name in SECURE_PROTOCOLS.items():
-                cmd_result = result.scan_result.get(scan_cmd)
+                cmd_result = getattr(result.scan_result, scan_cmd.value, None)
                 if cmd_result and cmd_result.result:
                     accepted = cmd_result.result.accepted_cipher_suites
                     if accepted:
@@ -261,7 +262,7 @@ class SslCheck(BaseCheck):
                 score_deductions += 50
 
             # 3. CERTIFICAT
-            cert_result = result.scan_result.get(ScanCommand.CERTIFICATE_INFO)
+            cert_result = getattr(result.scan_result, ScanCommand.CERTIFICATE_INFO.value, None)
             if cert_result and cert_result.result:
                 for deployment in cert_result.result.certificate_deployments:
                     cert = deployment.received_certificate_chain[0]
@@ -337,7 +338,7 @@ class SslCheck(BaseCheck):
                             break
 
             # 4. HEARTBLEED
-            heartbleed_result = result.scan_result.get(ScanCommand.HEARTBLEED)
+            heartbleed_result = getattr(result.scan_result, ScanCommand.HEARTBLEED.value, None)
             if heartbleed_result and heartbleed_result.result:
                 if heartbleed_result.result.is_vulnerable_to_heartbleed:
                     details.append(

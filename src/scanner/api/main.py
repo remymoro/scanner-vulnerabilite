@@ -18,6 +18,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from scanner.api.routers import scan as scan_router
+from scanner.api.routers import stream as stream_router
 from scanner.infrastructure.config import settings
 from scanner.infrastructure.database import close_databases, init_databases
 
@@ -70,6 +71,7 @@ app.add_middleware(
 # Branche le router de scan — tous ses endpoints sont maintenant
 # accessibles sous /scan (POST /scan/, GET /scan/{id})
 app.include_router(scan_router.router)
+app.include_router(stream_router.router)
 
 
 @app.get("/health")
