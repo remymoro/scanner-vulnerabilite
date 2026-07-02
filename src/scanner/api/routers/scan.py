@@ -20,6 +20,7 @@ import uuid
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Request
 
 from scanner.api.schemas.scan import ScanRequest, ScanResponse
+from scanner.checks.dns_check import DnsCheck
 from scanner.checks.headers import HeadersCheck
 from scanner.checks.ssl_tls import SslCheck
 from scanner.core.interfaces.report_repository import IReportRepository
@@ -53,9 +54,10 @@ def get_scan_service(request: Request) -> ScanService:
     sans état, donc les recréer ne coûte rien.
     """
     return ScanService(
-        checks=[HeadersCheck(), SslCheck()],
+        checks=[HeadersCheck(), SslCheck(), DnsCheck()],
         mongo_repo=request.app.state.mongo_repo,
         redis_repo=request.app.state.redis_repo,
+        cache_repo=request.app.state.cache_repo,  # ← explicite
     )
 
 

@@ -46,6 +46,7 @@ def _get_scan_service(request: Request) -> ScanService:
         checks=[HeadersCheck(), SslCheck(), DnsCheck()],
         mongo_repo=request.app.state.mongo_repo,
         redis_repo=request.app.state.redis_repo,
+        cache_repo=request.app.state.redis_repo,  # ← même objet Redis
     )
 
 
@@ -109,7 +110,6 @@ async def start_scan_stream(
     scan_id = str(uuid.uuid4())
     url = str(scan_request.url)
     scan_service = _get_scan_service(request)
-
     return StreamingResponse(
         _sse_generator(scan_service, scan_id, url),
         media_type="text/event-stream",
