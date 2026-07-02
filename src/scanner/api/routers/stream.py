@@ -30,6 +30,7 @@ from fastapi import APIRouter, Request
 from fastapi.responses import StreamingResponse
 
 from scanner.api.schemas.scan import ScanRequest
+from scanner.checks.dns_check import DnsCheck
 from scanner.checks.headers import HeadersCheck
 from scanner.checks.ssl_tls import SslCheck
 from scanner.services.scan_service import ScanService
@@ -42,7 +43,7 @@ router = APIRouter(
 
 def _get_scan_service(request: Request) -> ScanService:
     return ScanService(
-        checks=[HeadersCheck(), SslCheck()],
+        checks=[HeadersCheck(), SslCheck(), DnsCheck()],
         mongo_repo=request.app.state.mongo_repo,
         redis_repo=request.app.state.redis_repo,
     )
