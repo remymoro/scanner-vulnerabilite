@@ -10,6 +10,9 @@ from enum import StrEnum
 
 from scanner.core.entities.check_result import CheckResult
 
+# Poids de chaque check dans le score global : un check CRITICAL pèse 5 fois un INFO.
+SEVERITY_WEIGHTS = {"critical": 5, "high": 4, "medium": 3, "low": 2, "info": 1}
+
 
 class ScanStatus(StrEnum):
     """
@@ -50,19 +53,17 @@ class ScanReport:
         """
         Calcule le score global à partir des scores individuels.
 
-        Pourquoi une moyenne simple et pas une pondération ?
-        → Pour un premier MVP, la moyenne suffit. On pourra
-          pondérer par sévérité plus tard (un check CRITICAL
-          pèse plus qu'un check LOW). Mais la structure est
-          prête : chaque CheckResult a déjà un champ severity.
+        Moyenne pondérée par sévérité (voir SEVERITY_WEIGHTS) : un check
+        HIGH comme SSL/TLS pèse plus qu'un check LOW.
         """
         if not self.checks:
             self.overall_score = 0
             self.overall_grade = "F"
             return
 
-        total = sum(check.score for check in self.checks)
-        self.overall_score = total // len(self.checks)
+        weights = [SEVERITY_WEIGHTS.get(str(c.severity).lower(), 1) for c in self.checks]
+        weighted = sum(c.score * w for c, w in zip(self.checks, weights, strict=True))
+        self.overall_score = round(weighted / sum(weights))
         self.overall_grade = CheckResult.compute_grade(self.overall_score)
 
     def to_dict(self) -> dict:

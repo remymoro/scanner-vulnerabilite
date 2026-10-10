@@ -30,9 +30,8 @@ from fastapi import APIRouter, Request
 from fastapi.responses import StreamingResponse
 
 from scanner.api.schemas.scan import ScanRequest
-from scanner.checks.dns_check import DnsCheck
-from scanner.checks.headers import HeadersCheck
-from scanner.checks.ssl_tls import SslCheck
+from scanner.api.security import guard_scan_target
+from scanner.services.check_registry import default_checks
 from scanner.services.scan_service import ScanService
 
 router = APIRouter(
@@ -43,7 +42,7 @@ router = APIRouter(
 
 def _get_scan_service(request: Request) -> ScanService:
     return ScanService(
-        checks=[HeadersCheck(), SslCheck(), DnsCheck()],
+        checks=default_checks(),
         mongo_repo=request.app.state.mongo_repo,
         redis_repo=request.app.state.redis_repo,
         cache_repo=request.app.state.redis_repo,  # ← même objet Redis
@@ -107,8 +106,9 @@ async def start_scan_stream(
             console.log(decoder.decode(value));
         }
     """
-    scan_id = str(uuid.uuid4())
     url = str(scan_request.url)
+    await guard_scan_target(url, request)
+    scan_id = str(uuid.uuid4())
     scan_service = _get_scan_service(request)
     return StreamingResponse(
         _sse_generator(scan_service, scan_id, url),

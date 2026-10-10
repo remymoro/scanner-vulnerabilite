@@ -20,10 +20,9 @@ import uuid
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Request
 
 from scanner.api.schemas.scan import ScanRequest, ScanResponse
-from scanner.checks.dns_check import DnsCheck
-from scanner.checks.headers import HeadersCheck
-from scanner.checks.ssl_tls import SslCheck
+from scanner.api.security import guard_scan_target
 from scanner.core.interfaces.report_repository import IReportRepository
+from scanner.services.check_registry import default_checks
 from scanner.services.scan_service import ScanService
 
 router = APIRouter(
@@ -54,7 +53,7 @@ def get_scan_service(request: Request) -> ScanService:
     sans état, donc les recréer ne coûte rien.
     """
     return ScanService(
-        checks=[HeadersCheck(), SslCheck(), DnsCheck()],
+        checks=default_checks(),
         mongo_repo=request.app.state.mongo_repo,
         redis_repo=request.app.state.redis_repo,
         cache_repo=request.app.state.cache_repo,  # ← explicite
@@ -64,6 +63,7 @@ def get_scan_service(request: Request) -> ScanService:
 @router.post("/", response_model=ScanResponse)
 async def start_scan(
     request: ScanRequest,
+    http_request: Request,
     background_tasks: BackgroundTasks,
     scan_service: ScanService = Depends(get_scan_service),
 ) -> ScanResponse:
@@ -73,8 +73,9 @@ async def start_scan(
     Le client n'attend pas la fin du scan — il récupère le rapport
     via GET /scan/{scan_id} quand il est prêt.
     """
-    scan_id = str(uuid.uuid4())
     url = str(request.url)
+    await guard_scan_target(url, http_request)
+    scan_id = str(uuid.uuid4())
 
     # Lance le scan en arrière-plan — le POST retourne tout de suite
     background_tasks.add_task(scan_service.run_scan, scan_id, url)
