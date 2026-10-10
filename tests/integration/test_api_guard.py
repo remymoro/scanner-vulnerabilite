@@ -31,3 +31,38 @@ def test_rate_limit_returns_429(client):
     finally:
         security.scan_rate_limiter.max_scans = 10
     assert codes == [400, 400, 429]
+
+
+class _FakeQueue:
+    def __init__(self):
+        self.jobs = []
+
+    async def enqueue_job(self, name, *args):
+        self.jobs.append((name, args))
+
+
+def test_post_scan_enqueues_a_job(client):
+    queue = app.state.queue = _FakeQueue()
+    response = client.post("/scan/", json={"url": "https://8.8.8.8/"})
+    assert response.status_code == 200
+    scan_id = response.json()["scan_id"]
+    assert queue.jobs == [("run_scan_job", (scan_id, "https://8.8.8.8/"))]
+
+
+async def test_events_endpoint_streams_sse_until_terminal_event():
+    import fakeredis
+    import httpx
+
+    from scanner.repositories.redis_stream import RedisScanEventStream
+
+    stream = RedisScanEventStream(fakeredis.FakeAsyncRedis())
+    await stream.publish("abc", "check_complete", {"check_name": "WAF"})
+    await stream.publish("abc", "scan_complete", {"overall_score": 90})
+    app.state.event_stream = stream
+
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+        response = await client.get("/scan/abc/events")
+
+    assert "event: check_complete" in response.text
+    assert response.text.rstrip().endswith('data: {"overall_score": 90}')

@@ -24,13 +24,15 @@ En FastAPI, on utilise StreamingResponse avec un async generator.
 """
 
 import json
+import time
 import uuid
 
-from fastapi import APIRouter, Request
+from fastapi import APIRouter, Header, Request
 from fastapi.responses import StreamingResponse
 
 from scanner.api.schemas.scan import ScanRequest
 from scanner.api.security import guard_scan_target
+from scanner.core.interfaces.event_stream import TERMINAL_EVENTS, IScanEventStream
 from scanner.services.check_registry import default_checks
 from scanner.services.scan_service import ScanService
 
@@ -120,4 +122,41 @@ async def start_scan_stream(
             "Cache-Control": "no-cache",
             "X-Accel-Buffering": "no",
         },
+    )
+
+
+MAX_STREAM_SECONDS = 600
+
+
+async def _stream_events(stream: IScanEventStream, scan_id: str, last_id: str):
+    """Relit le flux du scan et le renvoie en SSE, avec un `id:` par événement."""
+    deadline = time.monotonic() + MAX_STREAM_SECONDS
+    while time.monotonic() < deadline:
+        events = await stream.read(scan_id, last_id)
+        if not events:
+            yield ": keepalive\n\n"  # commentaire SSE : garde la connexion ouverte
+            continue
+        for event in events:
+            last_id = event.id
+            yield f"id: {event.id}\nevent: {event.event}\ndata: {json.dumps(event.data)}\n\n"
+            if event.event in TERMINAL_EVENTS:
+                return
+
+
+@router.get("/{scan_id}/events")
+async def scan_events(
+    scan_id: str,
+    request: Request,
+    last_event_id: str | None = Header(default=None),
+) -> StreamingResponse:
+    """
+    Suit un scan lancé avec POST /scan/ (SSE).
+
+    Si la connexion tombe, le navigateur (EventSource) se reconnecte tout seul
+    avec l'en-tête Last-Event-ID et reprend après le dernier événement reçu.
+    """
+    return StreamingResponse(
+        _stream_events(request.app.state.event_stream, scan_id, last_event_id or "0-0"),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
     )

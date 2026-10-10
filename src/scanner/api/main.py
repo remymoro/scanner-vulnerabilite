@@ -21,6 +21,8 @@ Trois responsabilités :
 
 from contextlib import asynccontextmanager
 
+from arq import create_pool
+from arq.connections import RedisSettings
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
@@ -28,6 +30,7 @@ from scanner.api.routers import scan as scan_router
 from scanner.api.routers import stream as stream_router
 from scanner.infrastructure.config import settings
 from scanner.infrastructure.database import close_databases, init_databases
+from scanner.repositories.redis_stream import RedisScanEventStream
 
 
 @asynccontextmanager
@@ -70,12 +73,15 @@ async def lifespan(app: FastAPI):
     # Le router passera cet objet au ScanService comme cache_repo
     # ScanService voit ICacheRepository — pas Redis directement
     app.state.cache_repo = redis_repo
+    app.state.event_stream = RedisScanEventStream(redis_repo.redis)
+    app.state.queue = await create_pool(RedisSettings.from_dsn(settings.redis_url))
 
     print("Connected to MongoDB and Redis")
     yield
 
     # Arrêt propre — ferme les connexions DB
     # Évite les connexions "zombies" qui restent ouvertes
+    await app.state.queue.aclose()
     await close_databases(mongo_repo, redis_repo)
     print("Scanner API shutting down...")
 

@@ -12,6 +12,18 @@ services:
       mongodb:
         condition: service_healthy
 
+  worker:
+    build: .
+    command: arq scanner.worker.WorkerSettings
+    environment:
+      MONGO_URL: mongodb://mongodb:27017
+      REDIS_URL: redis://redis:6379
+    depends_on:
+      redis:
+        condition: service_healthy
+      mongodb:
+        condition: service_healthy
+
   redis:
     image: redis:7-alpine
     ports:

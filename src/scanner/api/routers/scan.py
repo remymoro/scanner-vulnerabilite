@@ -1,29 +1,24 @@
 """
 Router pour les endpoints de scan.
 
-Le POST /scan lance les checks en arrière-plan via BackgroundTasks
-et retourne immédiatement un scan_id au client. Le client récupère
-le rapport plus tard via GET /scan/{scan_id}.
+POST /scan dépose le scan dans une file ARQ (Redis) et répond tout de suite
+avec un scan_id. Un worker séparé exécute les checks ; le client suit
+l'avancement via GET /scan/{scan_id}/events ou lit le rapport final via
+GET /scan/{scan_id}.
 
-Pourquoi BackgroundTasks et pas un await direct ?
-→ Un scan SSL prend 5-15 secondes. Si on fait await dans le POST,
-  le client attend 15 secondes avant d'avoir une réponse — mauvaise UX.
-  Avec BackgroundTasks, le POST répond en ~50ms avec le scan_id,
-  et le scan tourne en arrière-plan.
-
-En NestJS, l'équivalent serait un EventEmitter ou un Bull queue :
-  this.eventEmitter.emit('scan.start', { scanId, url });
+Pourquoi une file plutôt que BackgroundTasks ?
+→ BackgroundTasks tourne dans le process de l'API : un redémarrage ou un
+  crash perd le scan. Avec la file, le job survit et on peut ajouter des
+  workers pour absorber la charge.
 """
 
 import uuid
 
-from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Request
+from fastapi import APIRouter, Depends, HTTPException, Request
 
 from scanner.api.schemas.scan import ScanRequest, ScanResponse
 from scanner.api.security import guard_scan_target
 from scanner.core.interfaces.report_repository import IReportRepository
-from scanner.services.check_registry import default_checks
-from scanner.services.scan_service import ScanService
 
 router = APIRouter(
     prefix="/scan",
@@ -39,52 +34,20 @@ def get_mongo_repo(request: Request) -> IReportRepository:
     return request.app.state.mongo_repo
 
 
-def get_scan_service(request: Request) -> ScanService:
-    """
-    Crée le ScanService avec les vrais checks et repositories.
-
-    Pourquoi créer le service à chaque requête plutôt qu'une seule
-    fois au démarrage ?
-    → Parce que la liste des checks pourrait varier par requête
-      (ex: un paramètre ?checks=headers,ssl). Pour l'instant c'est
-      fixe, mais la structure est prête pour évoluer.
-
-    Les checks sont instanciés ici — ce sont des objets légers
-    sans état, donc les recréer ne coûte rien.
-    """
-    return ScanService(
-        checks=default_checks(),
-        mongo_repo=request.app.state.mongo_repo,
-        redis_repo=request.app.state.redis_repo,
-        cache_repo=request.app.state.cache_repo,  # ← explicite
-    )
-
-
 @router.post("/", response_model=ScanResponse)
-async def start_scan(
-    request: ScanRequest,
-    http_request: Request,
-    background_tasks: BackgroundTasks,
-    scan_service: ScanService = Depends(get_scan_service),
-) -> ScanResponse:
+async def start_scan(request: ScanRequest, http_request: Request) -> ScanResponse:
     """
-    Lance un scan en arrière-plan et retourne immédiatement le scan_id.
+    Dépose le scan dans la file ARQ et retourne immédiatement le scan_id.
 
-    Le client n'attend pas la fin du scan — il récupère le rapport
-    via GET /scan/{scan_id} quand il est prêt.
+    Un worker exécute le scan dans un autre process. Le client suit l'avancement
+    avec GET /scan/{scan_id}/events (SSE) ou récupère le rapport final avec
+    GET /scan/{scan_id}.
     """
     url = str(request.url)
     await guard_scan_target(url, http_request)
     scan_id = str(uuid.uuid4())
-
-    # Lance le scan en arrière-plan — le POST retourne tout de suite
-    background_tasks.add_task(scan_service.run_scan, scan_id, url)
-
-    return ScanResponse(
-        scan_id=scan_id,
-        status="pending",
-        message=f"Scan started for {url}",
-    )
+    await http_request.app.state.queue.enqueue_job("run_scan_job", scan_id, url)
+    return ScanResponse(scan_id=scan_id, status="pending", message=f"Scan started for {url}")
 
 
 @router.get("/{scan_id}")

@@ -17,7 +17,7 @@ Le score global est une moyenne **pondérée par sévérité** (un check HIGH p�
 ## Lancer le projet
 
 ```bash
-docker compose up --build      # api + redis + mongodb → http://localhost:8000/docs
+docker compose up --build      # api + worker + redis + mongodb → http://localhost:8000/docs
 ```
 
 En local, sans Docker pour l'API :
@@ -25,18 +25,31 @@ En local, sans Docker pour l'API :
 ```bash
 docker compose up redis mongodb -d
 pip install -e ".[dev]"
-uvicorn scanner.api.main:app --reload
+uvicorn scanner.api.main:app --reload      # terminal 1 : l'API
+arq scanner.worker.WorkerSettings          # terminal 2 : le worker qui exécute les scans
 ```
 
 ## API
 
-- `POST /scan/` → lance un scan en arrière-plan, renvoie un `scan_id`
-- `GET /scan/{scan_id}` → récupère le rapport (Redis puis MongoDB)
-- `POST /scan/stream` → scan avec résultats en temps réel (SSE)
+- `POST /scan/` → dépose le scan dans la file (ARQ), renvoie un `scan_id`
+- `GET /scan/{scan_id}/events` → suit le scan en temps réel (SSE), reprise possible via `Last-Event-ID`
+- `GET /scan/{scan_id}` → récupère le rapport final (Redis puis MongoDB)
+- `POST /scan/stream` → ancien mode : scan exécuté dans la requête (déconseillé)
 - `GET /health`
 
 Sécurité du scanner : les cibles internes (localhost, 10.x, 169.254.x...) sont refusées (anti-SSRF)
 et chaque IP est limitée à 10 scans par minute.
+
+## Temps réel
+
+```
+client ──POST /scan/──▶ API ──enqueue──▶ file ARQ (Redis) ──▶ worker
+   ▲                                                            │ publie
+   └──── GET /scan/{id}/events (SSE) ◀── Redis Stream ◀─────────┘
+```
+
+Le scan s'exécute dans le worker, pas dans la requête : il continue si le client se déconnecte,
+et un client qui se reconnecte reprend après le dernier événement reçu.
 
 ## Ajouter un check
 
@@ -50,8 +63,9 @@ et chaque IP est limitée à 10 scans par minute.
 src/scanner/
 ├── core/            entités, interfaces, exceptions (aucune lib externe)
 ├── checks/          un fichier = un scanner
-├── services/        ScanService (orchestration) + check_registry
-├── repositories/    Mongo + Redis
+├── services/        ScanService (orchestration), check_registry, scan_jobs (job du worker)
+├── worker.py        worker ARQ
+├── repositories/    Mongo, Redis, flux d'événements (Redis Streams)
 ├── api/             routers, schemas, security (anti-SSRF, rate limit)
 └── infrastructure/  config, connexions
 tests/               unit/ et integration/
