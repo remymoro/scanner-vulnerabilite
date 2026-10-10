@@ -33,6 +33,13 @@ Chaque fichier suit le même format : analogie → attaque → détection → co
 | [spf-dkim-dmarc.md](dns/spf-dkim-dmarc.md) | SPF/DKIM/DMARC | Email spoofing, phishing |
 | [subdomain-enum.md](dns/subdomain-enum.md) | Sous-domaines exposés | Reconnaissance attaquant |
 
+## WAF et limitation de débit
+
+| Fichier | Protection | Attaque bloquée |
+|---|---|---|
+| [waf-detection.md](waf/waf-detection.md) | WAF en place | XSS, injection SQL |
+| [rate-limiting.md](waf/rate-limiting.md) | Limite de requêtes | Force brute, DoS applicatif |
+
 ## Configuration Nginx
 
 | Fichier | Protection | Attaque bloquée |
